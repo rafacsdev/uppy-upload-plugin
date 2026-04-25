@@ -9,6 +9,7 @@
     var uppyInstances = new WeakMap();
     var uppyModulePromise = null;
     var uppyLocaleCache = {};
+    var RECORDING_WARNING_LIMIT_SECONDS = 120;
 
     var UPPY_LOCALE_MAP = {
         'en': null, 'ar': 'ar_SA', 'de': 'de_DE', 'es': 'es_ES',
@@ -44,8 +45,14 @@
         if (!uppyLocale) return null;
         if (uppyLocaleCache[uppyLocale]) return uppyLocaleCache[uppyLocale];
         try {
-            var url = 'https://releases.transloadit.com/uppy/locales/v4.3.0/' + uppyLocale + '.min.js';
-            var resp = await fetch(url);
+            // Tenta carregar do path local primeiro (/public/js/uppy-locales/)
+            var localUrl = '/js/uppy-locales/' + uppyLocale + '.min.js';
+            var resp = await fetch(localUrl);
+            if (!resp.ok) {
+                // Se local falhar, tenta do CDN remoto
+                var cdnUrl = 'https://releases.transloadit.com/uppy/locales/v3.3.1/' + uppyLocale + '.min.js';
+                resp = await fetch(cdnUrl);
+            }
             if (!resp.ok) return null;
             var text = await resp.text();
             var fn = new Function(text + '; return globalThis.Uppy && globalThis.Uppy.locales && globalThis.Uppy.locales.' + uppyLocale + ';');
@@ -73,12 +80,92 @@
             docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             xls: 'application/vnd.ms-excel',
             xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            xml: 'application/xml',
         })[ext] || 'application/octet-stream';
     }
 
     function getCsrf() {
         var el = document.querySelector('meta[name="csrf-token"]');
         return el ? el.content : '';
+    }
+
+    function translateUppyMessage(message) {
+        if (!message) return message;
+
+        if (typeof message === 'string') {
+            if (/the request is not allowed/i.test(message)) {
+                return 'A solicitação não foi permitida pelo navegador ou pelo dispositivo neste contexto.';
+            }
+
+            if (/permission denied|access denied|notallowederror/i.test(message)) {
+                return 'Permissão negada. Autorize o acesso no navegador para continuar.';
+            }
+
+            return message;
+        }
+
+        if (typeof message === 'object') {
+            var translated = Object.assign({}, message);
+
+            if (translated.message) {
+                translated.message = translateUppyMessage(translated.message);
+            }
+
+            if (translated.details) {
+                translated.details = translateUppyMessage(translated.details);
+            }
+
+            return translated;
+        }
+
+        return message;
+    }
+
+    function createRecordingWarningController(uppy, limitSeconds) {
+        var timer = null;
+
+        function stop() {
+            if (!timer) return;
+            clearTimeout(timer);
+            timer = null;
+        }
+
+        function start() {
+            stop();
+            timer = setTimeout(function () {
+                uppy.info(
+                    'A gravação está chegando no limite. Finalize agora para evitar perder o envio.',
+                    'warning',
+                    10000
+                );
+            }, limitSeconds * 1000);
+        }
+
+        function bindPlugin(plugin) {
+            if (!plugin) return;
+
+            if (typeof plugin.startRecording === 'function') {
+                var originalStartRecording = plugin.startRecording.bind(plugin);
+                plugin.startRecording = function () {
+                    start();
+                    return originalStartRecording.apply(plugin, arguments);
+                };
+            }
+
+            if (typeof plugin.stopRecording === 'function') {
+                var originalStopRecording = plugin.stopRecording.bind(plugin);
+                plugin.stopRecording = function () {
+                    stop();
+                    return originalStopRecording.apply(plugin, arguments);
+                };
+            }
+        }
+
+        return {
+            bindPlugin: bindPlugin,
+            start: start,
+            stop: stop,
+        };
     }
 
     async function postWithRetry(url, formData, retries) {
@@ -150,30 +237,89 @@
 
                     var uppy = new mod.Uppy(uppyOpts);
                     uppyInstances.set(el, uppy);
-
-                    var note = config.note || '';
-                    if (!note) {
-                        var parts = [];
-                        if (config.maxFileSize > 0) { var t = config.translations || {}; parts.push((t.max_file_size || 'Max') + ': ' + fmtBytes(config.maxFileSize)); }
-                        if (config.acceptedFileTypes && config.acceptedFileTypes.length > 0) parts.push(config.acceptedFileTypes.join(', '));
-                        note = parts.join(' · ');
-                    }
+                    var recordingWarning = createRecordingWarningController(uppy, RECORDING_WARNING_LIMIT_SECONDS);
+                    var originalInfo = uppy.info.bind(uppy);
+                    uppy.info = function (message, type, duration) {
+                        return originalInfo(translateUppyMessage(message), type, duration);
+                    };
 
                     var detectedTheme = config.theme || 'auto';
                     if (detectedTheme === 'auto') detectedTheme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+                    var t = config.translations || {};
+                    var defaultNote = null;
+                    if (config.maxFileSize > 0) {
+                        defaultNote = (t.max_file_size || 'Tamanho máximo do arquivo') + ': ' + fmtBytes(config.maxFileSize);
+                    }
+                    var dashboardLocale = {
+                        strings: {
+                            browseFiles: t.browse_files,
+                            dropPasteFiles: t.drop_paste_files,
+                            dropPasteImportFiles: t.drop_paste_import_files,
+                            importFiles: t.import_files,
+                            importFrom: '%{name}',
+                            myDevice: t.my_device,
+                        },
+                    };
 
                     uppy.use(mod.Dashboard, {
                         target: el, inline: config.inline !== false, width: '100%', height: config.height || 350,
-                        showProgressDetails: true, showRemoveButtonAfterComplete: true, note: note || undefined,
+                        showProgressDetails: true, showRemoveButtonAfterComplete: true,
                         proudlyDisplayPoweredByUppy: false, theme: detectedTheme,
                         singleFileFullScreen: config.multiple === false,
                         autoOpen: config.autoOpenFileEditor ? 'imageEditor' : null,
                         hideUploadButton: false, doneButtonHandler: null,
+                        note: config.note || defaultNote,
+                        locale: dashboardLocale,
                     });
 
-                    if (config.webcam !== false && mod.Webcam) uppy.use(mod.Webcam, { target: mod.Dashboard, showVideoSourceDropdown: true, showRecordingLength: true, mirror: true, modes: ['video-audio', 'video-only', 'audio-only', 'picture'] });
-                    if (config.screenCapture !== false && mod.ScreenCapture) uppy.use(mod.ScreenCapture, { target: mod.Dashboard });
-                    if (config.audio !== false && mod.Audio) uppy.use(mod.Audio, { target: mod.Dashboard, showRecordingLength: true });
+                    if (config.webcam !== false && mod.Webcam) uppy.use(mod.Webcam, {
+                        target: mod.Dashboard,
+                        showVideoSourceDropdown: true,
+                        showRecordingLength: true,
+                        mirror: true,
+                        modes: ['video-audio', 'video-only', 'audio-only', 'picture'],
+                        locale: {
+                            strings: {
+                                takePicture: 'Tirar foto',
+                                startRecording: 'Iniciar gravação',
+                                allowAccessTitle: 'Permita acesso a sua camera',
+                                allowAccessDescription: 'Para tirar fotos ou gravar video, permita o acesso a camera neste site.',
+                                noCameraTitle: 'Camera indisponivel',
+                                noCameraDescription: 'Para tirar fotos ou gravar video, conecte uma camera ao dispositivo.',
+                                discardRecordedFile: 'Descartar arquivo',
+                            },
+                        },
+                    });
+                    if (config.screenCapture !== false && mod.ScreenCapture) uppy.use(mod.ScreenCapture, {
+                        target: mod.Dashboard,
+                        title: 'Gravar Tela',
+                        locale: {
+                            strings: {
+                                pluginNameScreenCapture: 'Gravar Tela',
+                                startCapturing: 'Gravar Tela',
+                                stopCapturing: 'Parar gravação',
+                                takeScreenshot: 'Tirar print',
+                                submitRecordedFile: 'Salvando gravação de tela',
+                                discardRecordedFile: 'Descartar arquivo',
+                                cancel: 'Cancelar',
+                                recording: 'Gravando',
+                            },
+                        },
+                    });
+                    if (config.audio !== false && mod.Audio) uppy.use(mod.Audio, {
+                        target: mod.Dashboard,
+                        showRecordingLength: true,
+                        locale: {
+                            strings: {
+                                startAudioRecording: 'Iniciar gravação de áudio',
+                                allowAudioAccessTitle: 'Permita acesso ao seu microfone',
+                                allowAudioAccessDescription: 'Para gravar áudio, permita o acesso ao microfone neste site.',
+                                noAudioTitle: 'Microfone indisponivel',
+                                noAudioDescription: 'Para gravar audio, conecte um microfone ou outra entrada de audio.',
+                                discardRecordedFile: 'Descartar arquivo',
+                            },
+                        },
+                    });
                     if (config.imageEditor !== false && mod.ImageEditor) uppy.use(mod.ImageEditor, { target: mod.Dashboard, quality: 0.8 });
                     if (mod.Compressor) uppy.use(mod.Compressor, { quality: 0.8, limit: 10 });
                     if (config.dragDrop !== false && mod.DropTarget) { try { uppy.use(mod.DropTarget, { target: document.body }); } catch (e) {} }
@@ -186,6 +332,10 @@
                         } catch (e) { console.warn('[UppyUpload] RemoteSources failed:', e); }
                     }
 
+                    recordingWarning.bindPlugin(uppy.getPlugin('Webcam'));
+                    recordingWarning.bindPlugin(uppy.getPlugin('Audio'));
+                    recordingWarning.bindPlugin(uppy.getPlugin('ScreenCapture'));
+
                     var self = this;
                     uppy.addUploader(function (fileIDs) { return self._handleUpload(fileIDs); });
                     uppy.on('file-removed', function (file, reason) {
@@ -194,6 +344,9 @@
                             self._rmServer(file.response.body.path);
                         }
                     });
+                    uppy.on('cancel-all', function () { recordingWarning.stop(); });
+                    uppy.on('complete', function () { recordingWarning.stop(); });
+                    uppy.on('error', function () { recordingWarning.stop(); });
 
                     if (Array.isArray(this.state) && this.state.length > 0) this._syncExisting(uppy, this.state);
                     this.isLoading = false;
@@ -236,7 +389,7 @@
                         fd.append('filename', file.name); fd.append('disk', config.disk || 'public'); fd.append('directory', config.directory || 'uploads');
                         var res = await postWithRetry(config.uploadEndpoint || '/uppy/upload', fd);
                         uppy.emit('upload-progress', file, { uploader: this, bytesUploaded: end, bytesTotal: total });
-                        if (res.completed) { this._markComplete(uppy, file, fid, total, res); this._addState(res.path); }
+                        if (res.completed) { this._markComplete(uppy, file, fid, total, res); this._addState(res); }
                     }
                 },
 
@@ -245,12 +398,49 @@
                     uppy.emit('upload-success', file, { status: 200, body: res });
                 },
 
-                _addState(path) {
-                    if (!Array.isArray(this.state)) this.state = [];
-                    if (this.state.indexOf(path) === -1) this.state = this.state.concat([path]);
+                _normalizeStateItem(item) {
+                    if (!item) return null;
+                    if (typeof item === 'string') return { path: item };
+                    var path = item.path || null;
+                    if (!path) return null;
+                    return {
+                        path: path,
+                        size: item.size || null,
+                        name: item.original_filename || item.name || item.filename || null,
+                        mime_type: item.mime_type || null,
+                    };
                 },
 
-                _rmState(path) { if (Array.isArray(this.state)) this.state = this.state.filter(function (x) { return x !== path; }); },
+                _addState(item) {
+                    var normalized = this._normalizeStateItem(item);
+                    if (!normalized || !normalized.path) return;
+                    if (!Array.isArray(this.state)) this.state = [];
+                    var exists = this.state.some(function (existing) {
+                        if (typeof existing === 'string') return existing === normalized.path;
+                        return existing && existing.path === normalized.path;
+                    });
+                    if (!exists) this.state = this.state.concat([normalized]);
+                    if (this.$wire && typeof this.$wire.$set === 'function' && config.statePath) {
+                        this.$wire.$set(config.statePath, this.state, true);
+                    }
+                    window.dispatchEvent(new CustomEvent('uppy-upload-complete', {
+                        detail: {
+                            statePath: config.statePath || null,
+                            path: normalized.path || null,
+                            item: normalized,
+                        },
+                    }));
+                },
+
+                _rmState(path) {
+                    if (Array.isArray(this.state)) this.state = this.state.filter(function (x) {
+                        if (typeof x === 'string') return x !== path;
+                        return !x || x.path !== path;
+                    });
+                    if (this.$wire && typeof this.$wire.$set === 'function' && config.statePath) {
+                        this.$wire.$set(config.statePath, this.state, true);
+                    }
+                },
 
                 async _rmServer(path) {
                     if (!config.deleteEndpoint) return;
@@ -258,11 +448,13 @@
                 },
 
                 _syncExisting(uppy, paths) {
-                    paths.forEach(function (p) {
-                        var nm = p.split('/').pop();
+                    paths.forEach(function (item) {
+                        var p = typeof item === 'string' ? item : (item && item.path ? item.path : null);
+                        if (!p) return;
+                        var nm = (item && (item.name || item.original_filename || item.filename)) || p.split('/').pop();
                         try {
                             var id = uppy.addFile({ name: nm, type: guessMime(nm), data: new Blob(['']), source: 'existing', isRemote: false });
-                            uppy.setFileState(id, { progress: { uploadComplete: true, uploadStarted: Date.now(), bytesUploaded: 1, bytesTotal: 1, percentage: 100 }, response: { status: 200, body: { path: p, filename: nm } } });
+                            uppy.setFileState(id, { progress: { uploadComplete: true, uploadStarted: Date.now(), bytesUploaded: 1, bytesTotal: 1, percentage: 100 }, response: { status: 200, body: { path: p, filename: nm, original_filename: nm } } });
                         } catch (e) {}
                     });
                 },
