@@ -89,6 +89,12 @@
         return el ? el.content : '';
     }
 
+    function compactObject(obj) {
+        return Object.fromEntries(Object.entries(obj).filter(function (entry) {
+            return entry[1] !== undefined && entry[1] !== null && entry[1] !== '';
+        }));
+    }
+
     function translateUppyMessage(message) {
         if (!message) return message;
 
@@ -250,16 +256,18 @@
                     if (config.maxFileSize > 0) {
                         defaultNote = (t.max_file_size || 'Tamanho máximo do arquivo') + ': ' + fmtBytes(config.maxFileSize);
                     }
-                    var dashboardLocale = {
-                        strings: {
-                            browseFiles: t.browse_files,
-                            dropPasteFiles: t.drop_paste_files,
-                            dropPasteImportFiles: t.drop_paste_import_files,
-                            importFiles: t.import_files,
-                            importFrom: '%{name}',
-                            myDevice: t.my_device,
-                        },
-                    };
+                    var browseFilesLabel = 'carregar arquivo';
+                    var dropFilesLabel = t.drop_files || 'Arraste os arquivos para ca';
+                    var importFromLabel = t.or_import_from || 'ou importar de';
+                    var dashboardLocaleStrings = compactObject({
+                        browseFiles: browseFilesLabel,
+                        dropPasteFiles: dropFilesLabel + ' ou %{browseFiles}',
+                        dropPasteImportFiles: dropFilesLabel + ', %{browseFiles}, ' + importFromLabel,
+                        importFiles: t.import_files,
+                        importFrom: '%{name}',
+                        myDevice: t.my_device,
+                    });
+                    var dashboardLocale = Object.keys(dashboardLocaleStrings).length > 0 ? { strings: dashboardLocaleStrings } : null;
 
                     uppy.use(mod.Dashboard, {
                         target: el, inline: config.inline !== false, width: '100%', height: config.height || 350,
