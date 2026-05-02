@@ -238,8 +238,17 @@
                     if (config.multiple === false) { restrictions.maxNumberOfFiles = 1; }
                     else if (config.maxFiles > 0) { restrictions.maxNumberOfFiles = config.maxFiles; }
 
-                    var uppyOpts = { id: 'uppy-' + config.statePath.replace(/\./g, '-') + '-' + Date.now(), restrictions: restrictions, autoProceed: false };
+                    var t = config.translations || {};
+                    var uppyLocaleStrings = compactObject({
+                        uploadComplete: t.upload_complete,
+                    });
+                    var uppyOpts = { id: 'uppy-' + config.statePath.replace(/\./g, '-') + '-' + Date.now(), restrictions: restrictions, autoProceed: true };
                     if (localeObj) uppyOpts.locale = localeObj;
+                    if (Object.keys(uppyLocaleStrings).length > 0) {
+                        uppyOpts.locale = Object.assign({}, uppyOpts.locale || {}, {
+                            strings: Object.assign({}, (uppyOpts.locale && uppyOpts.locale.strings) || {}, uppyLocaleStrings),
+                        });
+                    }
 
                     var uppy = new mod.Uppy(uppyOpts);
                     uppyInstances.set(el, uppy);
@@ -251,7 +260,6 @@
 
                     var detectedTheme = config.theme || 'auto';
                     if (detectedTheme === 'auto') detectedTheme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-                    var t = config.translations || {};
                     var defaultNote = null;
                     if (config.maxFileSize > 0) {
                         defaultNote = (t.max_file_size || 'Tamanho máximo do arquivo') + ': ' + fmtBytes(config.maxFileSize);
@@ -266,6 +274,11 @@
                         importFiles: t.import_files,
                         importFrom: '%{name}',
                         myDevice: t.my_device,
+                        uploadComplete: t.upload_complete,
+                        xFilesSelected: {
+                            0: t.file_selected,
+                            1: t.files_selected,
+                        },
                     });
                     var dashboardLocale = Object.keys(dashboardLocaleStrings).length > 0 ? { strings: dashboardLocaleStrings } : null;
 
