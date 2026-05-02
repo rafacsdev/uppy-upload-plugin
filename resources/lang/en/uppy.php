@@ -13,6 +13,7 @@ return [
     'cancel' => 'Cancel',
     'complete' => 'Complete',
     'upload_complete' => 'Upload complete',
+    'add_more' => 'Add more',
     'file_selected' => '%{smart_count} file selected',
     'files_selected' => '%{smart_count} files selected',
     'upload_failed' => 'Upload failed',

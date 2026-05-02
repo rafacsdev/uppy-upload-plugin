@@ -449,6 +449,7 @@ class UppyUpload extends Field
             'cancel' => __('uppy-upload::uppy.cancel'),
             'complete' => __('uppy-upload::uppy.complete'),
             'upload_complete' => __('uppy-upload::uppy.upload_complete'),
+            'add_more' => __('uppy-upload::uppy.add_more'),
             'file_selected' => __('uppy-upload::uppy.file_selected'),
             'files_selected' => __('uppy-upload::uppy.files_selected'),
             'upload_failed' => __('uppy-upload::uppy.upload_failed'),

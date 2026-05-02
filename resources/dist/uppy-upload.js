@@ -274,6 +274,8 @@
                         importFiles: t.import_files,
                         importFrom: '%{name}',
                         myDevice: t.my_device,
+                        done: t.complete,
+                        addMoreFiles: t.add_more,
                         uploadComplete: t.upload_complete,
                         xFilesSelected: {
                             0: t.file_selected,

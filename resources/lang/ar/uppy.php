@@ -13,6 +13,7 @@ return [
     'cancel' => 'إلغاء',
     'complete' => 'مكتمل',
     'upload_complete' => 'اكتمل الرفع',
+    'add_more' => 'إضافة المزيد',
     'file_selected' => 'تم تحديد %{smart_count} ملف',
     'files_selected' => 'تم تحديد %{smart_count} ملفات',
     'upload_failed' => 'فشل الرفع',
